@@ -19,6 +19,7 @@
 # Copyright (C) 2024-2025 Deekshith SH
 
 # pylint: disable=protected-access
+import sys
 from collections import OrderedDict
 import copy
 from typing import AsyncGenerator, Optional, Dict
@@ -55,6 +56,13 @@ if Var.CONNECTION_LIMIT > 25:
 
 clients_dict = {}
 work_loads: Dict[int, int] = {}
+
+# === ADD THIS CHECK FOR THE SESSION VARIABLE ===
+if not Var.SESSION:
+    logging.critical("FATAL: SESSION variable is not set. Please generate a Telethon session string.")
+    sys.exit(1)
+# ===============================================
+
 StreamBot = TelegramClient(StringSession(Var.SESSION), Var.API_ID, Var.API_HASH, app_version=__version__)
 multi_clients = {}
 
