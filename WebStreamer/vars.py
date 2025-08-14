@@ -13,11 +13,12 @@ class Var(object):
 
     API_ID = int(environ.get("API_ID", 0))
     API_HASH = str(environ.get("API_HASH", ""))
+    BOT_TOKEN = str(environ.get("BOT_TOKEN"))
+    SESSION = str(environ.get("SESSION", "")) # <<< This variable is mandatory
+
     BIN_CHANNEL = int(
         environ.get("BIN_CHANNEL", None)
-    )  # you NEED to use a CHANNEL when you're using MULTI_CLIENT
-    BOT_TOKEN = str(environ.get("BOT_TOKEN"))
-
+    )
     ALLOWED_USERS = [int(x.strip()) for x in environ.get("ALLOWED_USERS", "").split(",") if x.strip()]
     BIND_ADDRESS = str(environ.get("WEB_SERVER_BIND_ADDRESS", "0.0.0.0"))
     BLOCKED_USERS = [int(x.strip()) for x in environ.get("BLOCKED_USERS", "").split(",") if x.strip()]
@@ -39,3 +40,4 @@ class Var(object):
     SLEEP_THRESHOLD = int(environ.get("SLEEP_THRESHOLD", "60"))  # 1 minte
     TRUST_HEADERS: bool = str(environ.get("TRUST_HEADERS", "1").lower()) in ("1", "true", "t", "yes", "y")
     URL = f"http{"s" if HAS_SSL else ""}://{FQDN}{"" if NO_PORT else ":" + str(PORT)}/"
+
