@@ -1,21 +1,81 @@
-# Taken from megadlbot_oss <https://github.com/eyaadh/megadlbot_oss/blob/master/mega/webserver/routes.py>
-# Thanks to Eyaadh <https://github.com/eyaadh>
+# Modified stream_routes.py to support HLS streaming in addition to direct download.
 
 import time
 import logging
 import mimetypes
+import asyncio
 from aiohttp import web
 from aiohttp.http_exceptions import BadStatusLine
 from WebStreamer.clients import multi_clients, work_loads
-from WebStreamer.utils.file_properties import get_short_hash, pack_file
+from WebStreamer.utils.file_properties import get_short_hash, pack_file, FileInfo
 from WebStreamer.utils.util import allow_request, get_requester_ip, get_readable_time
 from WebStreamer.vars import Var
 from WebStreamer import StartTime, __version__
-from WebStreamer.utils.paralleltransfer import ParallelTransferrer
-
+from WebStreamer.clients import ParallelTransferrer
+from typing import Optional
 
 routes = web.RouteTableDef()
 class_cache = {}
+
+# Placeholder: In a real implementation, you would use ffmpeg to get video metadata.
+# For example, by running `ffprobe` as a subprocess.
+async def get_video_metadata(file_id: FileInfo) -> dict:
+    """Gets video metadata (duration, etc.) using a subprocess call to ffprobe."""
+    # This is a placeholder implementation.
+    # A real implementation would use asyncio.subprocess to run ffprobe.
+    # For now, we'll return dummy data.
+    return {
+        "duration_seconds": 60,  # Example duration
+        "segment_duration": 5,   # Example segment length
+    }
+
+
+async def create_hls_playlist(request: web.Request, file_id: FileInfo, secure_hash: str) -> str:
+    """
+    Generates an M3U8 playlist for HLS streaming.
+    This function needs to be a real-world implementation that uses video metadata.
+    """
+    metadata = await get_video_metadata(file_id)
+    duration_seconds = metadata.get("duration_seconds", 60)
+    segment_duration = metadata.get("segment_duration", 5)
+    num_segments = int(duration_seconds / segment_duration)
+
+    playlist = [
+        "#EXTM3U",
+        "#EXT-X-VERSION:3",
+        f"#EXT-X-TARGETDURATION:{segment_duration}",
+        "#EXT-X-PLAYLIST-TYPE:VOD",
+        f'#EXT-X-MEDIA-SEQUENCE:0',
+    ]
+
+    for i in range(num_segments):
+        playlist.append(f"#EXTINF:{segment_duration}.0,")
+        playlist.append(f"/hls/{file_id.id}/{i}.ts?hash={secure_hash}")
+
+    playlist.append("#EXT-X-ENDLIST")
+    return "\n".join(playlist)
+
+
+async def get_video_segment(file_id: FileInfo, segment_index: int) -> Optional[bytes]:
+    """
+    Serves a specific video segment.
+    This is a placeholder function that needs to be implemented with ffmpeg.
+    """
+    logging.warning("Placeholder function `get_video_segment` called. "
+                    "You need to implement this with ffmpeg.")
+    # Here you would use a tool like ffmpeg to extract and serve the requested segment.
+    # Example using ffmpeg:
+    # command = [
+    #    'ffmpeg', '-i', 'pipe:0', '-ss', str(segment_index * duration),
+    #    '-t', str(duration), '-c', 'copy', '-f', 'mpegts', 'pipe:1'
+    # ]
+    #
+    # You would then pass the file data from the bot to ffmpeg's stdin and
+    # read the segment data from stdout.
+    
+    # For now, we'll return None.
+    return None
+
 
 @routes.get("/status", allow_head=True)
 async def root_route_handler(_: web.Request):
@@ -34,6 +94,88 @@ async def root_route_handler(_: web.Request):
             "version": __version__,
         }
     )
+
+
+@routes.get(r"/hls/{messageID:\d+}.m3u8", allow_head=True)
+async def hls_playlist_handler(request: web.Request):
+    try:
+        message_id = int(request.match_info["messageID"])
+        secure_hash = request.rel_url.query.get("hash")
+
+        index = min(work_loads, key=work_loads.get)
+        faster_client = multi_clients[index]
+        transfer = class_cache.get(faster_client) or ParallelTransferrer(faster_client)
+        
+        file_id = await transfer.get_file_properties(message_id)
+        if not file_id:
+            return web.Response(status=404, text="File not found")
+
+        full_hash = pack_file(
+            file_id.file_name,
+            file_id.file_size,
+            file_id.mime_type,
+            file_id.id
+        )
+        if get_short_hash(full_hash) != secure_hash:
+            return web.HTTPForbidden(text="Invalid hash")
+
+        playlist_content = await create_hls_playlist(request, file_id, secure_hash)
+
+        return web.Response(
+            status=200,
+            text=playlist_content,
+            headers={
+                "Content-Type": "application/x-mpegURL",
+                "Content-Disposition": "inline"
+            }
+        )
+    except (AttributeError, BadStatusLine, ConnectionResetError):
+        pass
+    except Exception as e:
+        logging.critical(str(e), exc_info=True)
+        raise web.HTTPInternalServerError(text=str(e))
+
+
+@routes.get(r"/hls/{messageID:\d+}/{segment:\d+}.ts", allow_head=True)
+async def hls_segment_handler(request: web.Request):
+    try:
+        message_id = int(request.match_info["messageID"])
+        segment_index = int(request.match_info["segment"])
+        secure_hash = request.rel_url.query.get("hash")
+
+        index = min(work_loads, key=work_loads.get)
+        faster_client = multi_clients[index]
+        transfer = class_cache.get(faster_client) or ParallelTransferrer(faster_client)
+
+        file_id = await transfer.get_file_properties(message_id)
+        if not file_id:
+            return web.Response(status=404, text="File not found")
+
+        full_hash = pack_file(
+            file_id.file_name,
+            file_id.file_size,
+            file_id.mime_type,
+            file_id.id
+        )
+        if get_short_hash(full_hash) != secure_hash:
+            return web.HTTPForbidden(text="Invalid hash")
+
+        segment_data = await get_video_segment(file_id, segment_index)
+        
+        if segment_data:
+            return web.Response(
+                status=200,
+                body=segment_data,
+                headers={"Content-Type": "video/MP2T"}
+            )
+        else:
+            return web.Response(status=500, text="Failed to generate video segment.")
+
+    except (AttributeError, BadStatusLine, ConnectionResetError):
+        pass
+    except Exception as e:
+        logging.critical(str(e), exc_info=True)
+        raise web.HTTPInternalServerError(text=str(e))
 
 
 @routes.get(r"/stream/{messageID:\d+}", allow_head=True)
@@ -69,7 +211,7 @@ async def media_streamer(request: web.Request, message_id: int, secure_hash: str
         transfer.post_init()
         class_cache[faster_client] = transfer
         logging.debug("Created new ByteStreamer object for client %s", index)
-    logging.debug("before calling get_file_properties")
+
     file_id = await transfer.get_file_properties(message_id)
     if not file_id:
         return web.Response(status=404, text="File not found")
@@ -113,15 +255,16 @@ async def media_streamer(request: web.Request, message_id: int, secure_hash: str
 
     mime_type = file_id.mime_type
     file_name = file_id.file_name
-    disposition = "attachment"
+    
+    # Change the default to 'inline' for streaming.
+    disposition = "inline"
+    if not request.rel_url.query.get("s"):
+        disposition = "attachment"
 
     if not mime_type:
         mime_type = mimetypes.guess_type(
             file_name)[0] or "application/octet-stream"
-
-    if request.rel_url.query.get("s"):
-        disposition = "inline"
-
+    
     return web.Response(
         status=206 if range_header else 200,
         body=body,
@@ -133,3 +276,4 @@ async def media_streamer(request: web.Request, message_id: int, secure_hash: str
             "Accept-Ranges": "bytes",
         },
     )
+
