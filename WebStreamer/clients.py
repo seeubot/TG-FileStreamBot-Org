@@ -39,6 +39,10 @@ from telethon.tl.types import DcOption
 from telethon.errors import DcIdInvalidError
 from telethon.sessions import StringSession
 
+# === ADD THIS LINE TO IMPORT __version__ ===
+from WebStreamer import __version__
+# ==========================================
+
 from WebStreamer.utils.util import decrement_counter, increment_counter
 from WebStreamer.utils.file_properties import FileInfo, get_file_ids
 from WebStreamer.vars import Var
