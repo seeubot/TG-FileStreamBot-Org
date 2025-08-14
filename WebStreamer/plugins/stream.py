@@ -31,13 +31,26 @@ async def media_receive_handler(event: NewMessage.Event):
             file_info.id
         )
         file_hash=get_short_hash(full_hash)
+        
+        # The original stream link for direct download
         stream_link = f"{Var.URL}stream/{log_msg.id}?hash={file_hash}"
+        
+        # The new HLS stream link
+        hls_stream_link = f"{Var.URL}hls/{log_msg.id}.m3u8?hash={file_hash}"
+        
         is_media = bool(set(file_info.mime_type.split("/")) & MEDIA)
+        
         buttons=[[Button.url("Open", url=stream_link)]]
-        message=f"<code>{stream_link}</code>"
+        message = f"<code>{stream_link}</code>"
+        
         if is_media:
+            # Add buttons for streaming and HLS
             buttons.append([Button.url("Stream", url=stream_link+"&s=1")])
-            message+=f"<a href='{stream_link}&s=1'>(Stream)</a>"
+            buttons.append([Button.url("HLS Stream", url=hls_stream_link)])
+            
+            message+=f"\n\n<a href='{stream_link}&s=1'>(Stream)</a>"
+            message+=f"\n<a href='{hls_stream_link}'>(HLS Stream)</a>"
+            
         await event.message.reply(
             message=message,
             link_preview=False,
@@ -46,3 +59,4 @@ async def media_receive_handler(event: NewMessage.Event):
         )
     except errors.FloodWaitError as e:
         logging.error(e)
+
