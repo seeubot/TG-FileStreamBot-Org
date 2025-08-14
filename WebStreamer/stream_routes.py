@@ -1,9 +1,11 @@
 # Modified stream_routes.py to support HLS streaming in addition to direct download.
+# This version implements video processing with FFmpeg.
 
 import time
 import logging
 import mimetypes
 import asyncio
+import tempfile
 from aiohttp import web
 from aiohttp.http_exceptions import BadStatusLine
 from WebStreamer.clients import multi_clients, work_loads
@@ -17,25 +19,75 @@ from typing import Optional
 routes = web.RouteTableDef()
 class_cache = {}
 
-# Placeholder: In a real implementation, you would use ffmpeg to get video metadata.
-# For example, by running `ffprobe` as a subprocess.
-async def get_video_metadata(file_id: FileInfo) -> dict:
-    """Gets video metadata (duration, etc.) using a subprocess call to ffprobe."""
-    # This is a placeholder implementation.
-    # A real implementation would use asyncio.subprocess to run ffprobe.
-    # For now, we'll return dummy data.
-    return {
-        "duration_seconds": 60,  # Example duration
-        "segment_duration": 5,   # Example segment length
-    }
+async def get_video_metadata(file_id: FileInfo, transfer: ParallelTransferrer) -> dict:
+    """
+    Gets video metadata (duration, etc.) by downloading the file and
+    piping it to ffprobe.
+    """
+    try:
+        logging.info("Starting ffprobe to get video metadata for file ID %s", file_id.id)
+        
+        # FFprobe command to get duration in seconds
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            '-i', 'pipe:0' # Read input from stdin
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        # Stream file data from Telegram to ffprobe's stdin
+        full_file_data_generator = transfer.download(
+            file_id, file_id.file_size, 0, file_id.file_size - 1, 0, "127.0.0.1"
+        )
+        
+        try:
+            async for chunk in full_file_data_generator:
+                process.stdin.write(chunk)
+            await process.stdin.drain()
+            process.stdin.close()
+        except (ConnectionResetError, BrokenPipeError):
+            logging.warning("Failed to pipe data to ffprobe, process likely exited early.")
+            process.kill()
+            await process.wait()
+            return {"duration_seconds": 60, "segment_duration": 5} # Fallback to dummy data
+            
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode == 0:
+            duration_seconds = float(stdout.decode().strip())
+            logging.info("ffprobe successful. Duration: %s seconds", duration_seconds)
+            return {
+                "duration_seconds": duration_seconds,
+                "segment_duration": 5 # Hardcoding segment duration for simplicity
+            }
+        else:
+            logging.error(f"ffprobe failed with error: {stderr.decode()}")
+            return {"duration_seconds": 60, "segment_duration": 5} # Fallback
+            
+    except Exception as e:
+        logging.critical(f"Error running ffprobe: {e}", exc_info=True)
+        return {"duration_seconds": 60, "segment_duration": 5} # Fallback
 
 
 async def create_hls_playlist(request: web.Request, file_id: FileInfo, secure_hash: str) -> str:
     """
     Generates an M3U8 playlist for HLS streaming.
-    This function needs to be a real-world implementation that uses video metadata.
+    This function uses ffprobe to get video duration.
     """
-    metadata = await get_video_metadata(file_id)
+    # Assuming ParallelTransferrer is available
+    index = min(work_loads, key=work_loads.get)
+    faster_client = multi_clients[index]
+    transfer = class_cache.get(faster_client) or ParallelTransferrer(faster_client)
+    
+    metadata = await get_video_metadata(file_id, transfer)
     duration_seconds = metadata.get("duration_seconds", 60)
     segment_duration = metadata.get("segment_duration", 5)
     num_segments = int(duration_seconds / segment_duration)
@@ -56,25 +108,69 @@ async def create_hls_playlist(request: web.Request, file_id: FileInfo, secure_ha
     return "\n".join(playlist)
 
 
-async def get_video_segment(file_id: FileInfo, segment_index: int) -> Optional[bytes]:
+async def get_video_segment(request: web.Request, file_id: FileInfo, segment_index: int) -> Optional[bytes]:
     """
-    Serves a specific video segment.
-    This is a placeholder function that needs to be implemented with ffmpeg.
+    Serves a specific video segment by using FFmpeg to extract it from the stream.
     """
-    logging.warning("Placeholder function `get_video_segment` called. "
-                    "You need to implement this with ffmpeg.")
-    # Here you would use a tool like ffmpeg to extract and serve the requested segment.
-    # Example using ffmpeg:
-    # command = [
-    #    'ffmpeg', '-i', 'pipe:0', '-ss', str(segment_index * duration),
-    #    '-t', str(duration), '-c', 'copy', '-f', 'mpegts', 'pipe:1'
-    # ]
-    #
-    # You would then pass the file data from the bot to ffmpeg's stdin and
-    # read the segment data from stdout.
+    try:
+        # Assuming each segment is 5 seconds long for this example.
+        segment_duration = 5
+        start_time_seconds = segment_index * segment_duration
+        
+        index = min(work_loads, key=work_loads.get)
+        faster_client = multi_clients[index]
+        transfer = class_cache.get(faster_client) or ParallelTransferrer(faster_client)
+
+        logging.info("Starting FFmpeg to extract segment %s for file ID %s", segment_index, file_id.id)
+        
+        # FFmpeg command to extract a single segment from an input stream.
+        command = [
+            'ffmpeg',
+            '-i', 'pipe:0',  # Read input from stdin
+            '-ss', str(start_time_seconds), # Seek to the start of the segment
+            '-t', str(segment_duration), # Grab a segment of this duration
+            '-c', 'copy',  # Copy the codecs without re-encoding
+            '-f', 'mpegts', # Output format is MPEG-TS
+            'pipe:1'  # Write output to stdout
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        # Get the full file data from Telegram using the ParallelTransferrer
+        file_size = file_id.file_size
+        full_file_data_generator = transfer.download(
+            file_id, file_size, 0, file_size - 1, 0, "127.0.0.1"
+        )
+        
+        # Stream the downloaded data to FFmpeg's stdin
+        try:
+            async for chunk in full_file_data_generator:
+                process.stdin.write(chunk)
+            await process.stdin.drain()
+            process.stdin.close()
+        except (ConnectionResetError, BrokenPipeError):
+            logging.warning("Failed to pipe data to FFmpeg, process likely exited early.")
+            process.kill()
+            await process.wait()
+            return None
+
+        # Read the segmented video data from FFmpeg's stdout
+        segment_data, stderr_data = await process.communicate()
+        
+        if process.returncode != 0:
+            logging.error(f"FFmpeg failed with error: {stderr_data.decode()}")
+            return None
+
+        return segment_data
     
-    # For now, we'll return None.
-    return None
+    except Exception as e:
+        logging.critical(f"An error occurred during FFmpeg processing: {e}", exc_info=True)
+        return None
 
 
 @routes.get("/status", allow_head=True)
@@ -101,11 +197,11 @@ async def hls_playlist_handler(request: web.Request):
     try:
         message_id = int(request.match_info["messageID"])
         secure_hash = request.rel_url.query.get("hash")
-
+        
         index = min(work_loads, key=work_loads.get)
         faster_client = multi_clients[index]
         transfer = class_cache.get(faster_client) or ParallelTransferrer(faster_client)
-        
+
         file_id = await transfer.get_file_properties(message_id)
         if not file_id:
             return web.Response(status=404, text="File not found")
@@ -160,7 +256,7 @@ async def hls_segment_handler(request: web.Request):
         if get_short_hash(full_hash) != secure_hash:
             return web.HTTPForbidden(text="Invalid hash")
 
-        segment_data = await get_video_segment(file_id, segment_index)
+        segment_data = await get_video_segment(request, file_id, segment_index)
         
         if segment_data:
             return web.Response(
