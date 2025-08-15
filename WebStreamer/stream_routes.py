@@ -15,16 +15,22 @@ from WebStreamer.vars import Var
 routes = web.RouteTableDef()
 log = logging.getLogger(__name__)
 
-@routes.get("/hls/{message_id}.m3u8")
-@routes.get("/stream/hls/{message_id}.m3u8")
-async def hls_stream_handler(request: web.Request):
-    message_id = request.match_info['message_id']
-    if not message_id.isdigit():
-        return web.Response(text="Invalid message ID", status=400)
-    
-    message_id = int(message_id)
-    hash_value = request.query.get("hash")
+@routes.get("/status", allow_head=True)
+async def root_route_handler(_: web.Request):
+    return web.json_response(
+        {
+            "server_status": "running",
+            "telegram_bot": "@" + Var.USERNAME,
+            "version": "1.0",
+        }
+    )
 
+@routes.get(r"/hls/{message_id:\d+}.m3u8", allow_head=True)
+@routes.get(r"/stream/hls/{message_id:\d+}.m3u8", allow_head=True)
+async def hls_stream_handler(request: web.Request):
+    message_id = int(request.match_info['message_id'])
+    hash_value = request.query.get("hash")
+    
     file_info = await get_file_info(StreamBot, Var.BIN_CHANNEL, message_id)
     if not file_info:
         return web.Response(text="File not found or not a valid document.", status=404)
@@ -53,14 +59,10 @@ async def hls_stream_handler(request: web.Request):
         log.error("An error occurred during HLS streaming: %s", e)
         return web.Response(text="An error occurred while trying to stream the file.", status=500)
 
-@routes.get("/{message_id}")
-@routes.get("/stream/{message_id}")
+@routes.get(r"/{message_id:\d+}", allow_head=True)
+@routes.get(r"/stream/{message_id:\d+}", allow_head=True)
 async def direct_stream_handler(request: web.Request):
-    message_id = request.match_info.get("message_id")
-    if not message_id or not message_id.isdigit():
-        return web.Response(text="Invalid message ID", status=400)
-
-    message_id = int(message_id)
+    message_id = int(request.match_info.get("message_id"))
     hash_value = request.query.get("hash")
     stream_as = request.query.get("s")
     
@@ -75,7 +77,6 @@ async def direct_stream_handler(request: web.Request):
     
     response = web.StreamResponse(status=200, headers={
         "Content-Type": file_info.mime_type,
-        "Content-Length": str(file_info.file_size),
         "Content-Disposition": f"{disposition}; filename={file_info.file_name}"
     })
     
