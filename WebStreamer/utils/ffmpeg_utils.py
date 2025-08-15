@@ -22,8 +22,26 @@ def is_media(mime_type: str) -> bool:
 async def stream_to_process(client: TelegramClient, file_info: FileInfo, process_cmd: list = None):
     """
     Robustly streams a file from Telegram and pipes it to an external process (like ffmpeg)
-    or directly to the client. This function uses a single, direct pipeline for stability.
+    or directly to the client. This function uses an asyncio Queue to buffer data,
+    preventing timeouts and pipe errors.
     """
+    queue = asyncio.Queue()
+    
+    # Task 1: Download chunks from Telegram into the queue
+    async def download_task():
+        try:
+            async for chunk in client.iter_download(file_info.location, chunk_size=524288):
+                await queue.put(chunk)
+            await queue.put(None)  # Sentinel value to signal end of stream
+        except asyncio.CancelledError:
+            await queue.put(None)
+            log.info("Download task cancelled.")
+        except Exception as e:
+            log.error(f"Error in download task: {e}")
+            await queue.put(None)
+    
+    download_coroutine = asyncio.create_task(download_task())
+    
     proc = None
     if process_cmd:
         try:
@@ -39,37 +57,51 @@ async def stream_to_process(client: TelegramClient, file_info: FileInfo, process
             raise
     
     try:
-        async for chunk in client.iter_download(file_info.location, chunk_size=524288):
-            if proc:
-                try:
-                    proc.stdin.write(chunk)
-                    await proc.stdin.drain()
-                except (BrokenPipeError, ConnectionResetError):
-                    log.warning("FFmpeg pipe closed prematurely.")
-                    break
-            else:
-                yield chunk
-
         if proc:
-            proc.stdin.close()
+            # Task 2: Feed the downloaded chunks from the queue to FFmpeg's stdin
+            async def feed_ffmpeg_stdin():
+                while True:
+                    chunk = await queue.get()
+                    if chunk is None:
+                        break
+                    try:
+                        proc.stdin.write(chunk)
+                        await proc.stdin.drain()
+                    except (BrokenPipeError, ConnectionResetError):
+                        log.warning("FFmpeg pipe closed prematurely.")
+                        break
+                proc.stdin.close()
             
-            while True:
-                chunk = await proc.stdout.read(8192)
-                if not chunk:
-                    break
-                yield chunk
+            feed_task = asyncio.create_task(feed_ffmpeg_stdin())
+
+            # Yield FFmpeg's stdout directly to the client
+            while not proc.stdout.at_eof():
+                yield await proc.stdout.read(8192)
             
+            await feed_task
             await proc.wait()
             
-    except (asyncio.CancelledError, ConnectionResetError):
+        else:
+            # Direct streaming: yield chunks from the queue directly
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+    
+    except asyncio.CancelledError:
         log.info("Stream cancelled by client.")
         if proc and proc.returncode is None:
             proc.terminate()
             await proc.wait()
+        download_coroutine.cancel()
         raise
     except Exception as e:
         log.error(f"Error during streaming: {e}")
     finally:
+        # Ensure cleanup of all tasks and processes
+        if download_coroutine and not download_coroutine.done():
+            download_coroutine.cancel()
         if proc and proc.returncode is None:
             proc.terminate()
             await proc.wait()
