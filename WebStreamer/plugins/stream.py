@@ -12,7 +12,10 @@ from WebStreamer.vars import Var
 
 MEDIA={"video", "audio"} # we can expand it to include more media types
 
-@StreamBot.on(NewMessage(func=lambda e: True if e.message.file and e.is_private else False))
+# FIX: Added 'forwards=True' to the NewMessage event handler.
+# This ensures that the bot's event system is explicitly configured
+# to listen for forwarded messages, which is what you're doing in the screenshot.
+@StreamBot.on(NewMessage(func=lambda e: True if e.message.file and e.is_private else False, forwards=True))
 async def media_receive_handler(event: NewMessage.Event):
     user = await event.get_sender()
     if (Var.ALLOWED_USERS and user.id not in Var.ALLOWED_USERS) or (
@@ -37,7 +40,7 @@ async def media_receive_handler(event: NewMessage.Event):
             file_info.file_name,
             file_info.file_size,
             file_info.mime_type,
-            file_info.file_id # Use file_info.file_id here
+            file_info.file_id
         )
         file_hash=get_short_hash(full_hash)
         
