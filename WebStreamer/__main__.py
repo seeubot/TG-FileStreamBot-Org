@@ -10,7 +10,7 @@ import traceback
 from aiohttp import web
 from WebStreamer.stream_routes import routes
 from WebStreamer.utils.util import load_plugins
-from WebStreamer.clients import StreamBot, initialize_clients
+from WebStreamer.clients import StreamBot
 from WebStreamer.vars import Var
 
 logging.basicConfig(
