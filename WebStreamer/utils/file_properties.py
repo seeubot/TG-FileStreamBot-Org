@@ -6,11 +6,15 @@
 # pylint: disable=protected-access
 
 import logging
+import hashlib
+import base64
+import json
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional
 from telethon import TelegramClient
-from telethon.tl.types import Message, Document, Channel
+from telethon.tl.types import Message, Document
 from telethon.errors import MessageIdInvalidError
+from WebStreamer.vars import Var
 
 root_log = logging.getLogger(__name__)
 
@@ -18,8 +22,38 @@ root_log = logging.getLogger(__name__)
 class FileInfo:
     file_id: str
     dc_id: int
+    file_size: int
+    file_name: str
+    mime_type: str
     location: Document
-    # You can add more attributes here as needed
+
+def get_short_hash(data: str) -> str:
+    """
+    Generates a URL-safe short hash from a string.
+    """
+    md5_hash = hashlib.md5(data.encode()).hexdigest()
+    # Use URL-safe base64 encoding to make the hash suitable for URLs
+    base64_encoded = base64.urlsafe_b64encode(md5_hash.encode()).decode()
+    return base64_encoded.rstrip("=")
+
+def pack_file(
+    file_name: str,
+    file_size: int,
+    mime_type: str,
+    file_id: str
+) -> str:
+    """
+    Packs file information into a JSON string and encodes it.
+    """
+    # Create a dictionary with file metadata
+    data = {
+        "file_name": file_name,
+        "file_size": file_size,
+        "mime_type": mime_type,
+        "file_id": file_id
+    }
+    # Serialize to a compact JSON string and encode
+    return json.dumps(data, separators=(",", ":"))
 
 async def get_file_ids(client: TelegramClient, chat_id: int, message_id: int) -> Optional[FileInfo]:
     """
@@ -30,19 +64,14 @@ async def get_file_ids(client: TelegramClient, chat_id: int, message_id: int) ->
     log = root_log.getChild("file-info")
     
     try:
-        # The message_id must be a simple integer.
-        # This will raise a ValueError if it is not.
         msg_id_int = int(message_id)
-
     except ValueError:
         log.error("Invalid message_id format: %s. Message ID must be a simple integer.", message_id)
         return None
 
     try:
-        # get_messages expects a list of integer IDs.
         message: Message = await client.get_messages(chat_id, ids=[msg_id_int])
 
-        # If no message is found, message[0] will be None
         if not message or not message[0]:
             log.warning("Message with ID %s not found in channel %s.", msg_id_int, chat_id)
             return None
@@ -55,11 +84,12 @@ async def get_file_ids(client: TelegramClient, chat_id: int, message_id: int) ->
 
         document: Document = message_obj.media.document
         
-        # We now have a valid document object, extract its properties.
-        # This is where the long integer from the traceback originates from a different file.
         file_info = FileInfo(
-            file_id=str(document.id), # Store as a string
+            file_id=str(document.id),
             dc_id=document.dc_id,
+            file_size=document.size,
+            file_name=document.file_name,
+            mime_type=document.mime_type,
             location=document
         )
 
