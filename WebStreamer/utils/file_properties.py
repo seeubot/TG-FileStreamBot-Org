@@ -102,3 +102,7 @@ async def get_file_ids(client: TelegramClient, chat_id: int, message_id: int) ->
         log.error("An unexpected error occurred while fetching message %s: %s", msg_id_int, e)
         return None
 
+# The get_file_info function is now an alias to get_file_ids to maintain compatibility
+# with other files that might still be using the old name.
+get_file_info = get_file_ids
+
