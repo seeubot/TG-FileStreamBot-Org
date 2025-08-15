@@ -21,82 +21,63 @@ def is_media(mime_type: str) -> bool:
 
 async def stream_to_process(client: TelegramClient, file_info: FileInfo, process_cmd: list = None):
     """
-    Robustly streams a file from Telegram and pipes it to an external process (like ffmpeg).
-    This function handles both direct and transcoded streams using an asyncio Queue.
+    Robustly streams a file from Telegram and pipes it to an external process (like ffmpeg)
+    or directly to the client. This function handles the entire process in a single
+    async coroutine for stability.
     """
-    queue = asyncio.Queue()
-    
-    # Task 1: Download chunks from Telegram into the queue
-    async def download_task():
-        try:
-            async for chunk in client.iter_download(file_info.location, chunk_size=524288):
-                await queue.put(chunk)
-            await queue.put(None)  # Sentinel value to signal end of stream
-        except asyncio.CancelledError:
-            await queue.put(None)
-            log.info("Download task cancelled.")
-        except Exception as e:
-            log.error(f"Error in download task: {e}")
-            await queue.put(None)
-    
-    download_coroutine = asyncio.create_task(download_task())
     
     proc = None
     if process_cmd:
-        # Task 2: Create a subprocess for FFmpeg if a command is provided
-        proc = await asyncio.create_subprocess_exec(
-            *process_cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL
-        )
+        try:
+            # Create a subprocess for FFmpeg
+            proc = await asyncio.create_subprocess_exec(
+                *process_cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+        except FileNotFoundError:
+            log.error("FFmpeg not found. Is it installed?")
+            raise
+    
+    download_iter = client.iter_download(file_info.location, chunk_size=524288)
 
     try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(download_iter.__anext__(), timeout=20)
+                if proc:
+                    proc.stdin.write(chunk)
+                    await proc.stdin.drain()
+                else:
+                    yield chunk
+            except StopAsyncIteration:
+                break # End of download
+            except asyncio.TimeoutError:
+                log.warning("Timeout during file download. Restarting iteration.")
+                continue # Retry the download chunk
+            
         if proc:
-            # Task 3: Feed the downloaded chunks from the queue to FFmpeg's stdin
-            async def feed_ffmpeg_stdin():
-                while True:
-                    chunk = await queue.get()
-                    if chunk is None:
-                        break
-                    try:
-                        proc.stdin.write(chunk)
-                        await proc.stdin.drain()
-                    except (BrokenPipeError, ConnectionResetError):
-                        log.warning("FFmpeg pipe closed prematurely.")
-                        break
-                proc.stdin.close()
+            proc.stdin.close()
             
-            feed_task = asyncio.create_task(feed_ffmpeg_stdin())
-
             # Yield FFmpeg's stdout directly to the client
-            while not proc.stdout.at_eof():
-                yield await proc.stdout.read(8192)
-            
-            await feed_task
-            await proc.wait()
-            
-        else:
-            # Direct streaming: yield chunks from the queue directly
             while True:
-                chunk = await queue.get()
-                if chunk is None:
+                chunk = await proc.stdout.read(8192)
+                if not chunk:
                     break
                 yield chunk
-    
-    except asyncio.CancelledError:
+            
+            await proc.wait()
+            
+    except (asyncio.CancelledError, ConnectionResetError):
         log.info("Stream cancelled by client.")
-        if proc:
+        if proc and proc.returncode is None:
             proc.terminate()
             await proc.wait()
-        download_coroutine.cancel()
         raise
     except Exception as e:
         log.error(f"Error during streaming: {e}")
     finally:
-        # Ensure cleanup of all tasks and processes
-        if download_coroutine and not download_coroutine.done():
-            download_coroutine.cancel()
         if proc and proc.returncode is None:
             proc.terminate()
             await proc.wait()
