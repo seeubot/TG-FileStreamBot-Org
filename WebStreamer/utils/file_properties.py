@@ -3,106 +3,84 @@
 # Modifications made by Deekshith SH, 2024-2025
 # Copyright (C) 2024-2025 Deekshith SH
 
-# pylint: disable=protected-access
-
-import logging
 import hashlib
 import base64
-import json
 from dataclasses import dataclass
+import logging
 from typing import Optional
 from telethon import TelegramClient
-from telethon.tl.types import Message, Document
-from telethon.errors import MessageIdInvalidError
-from WebStreamer.vars import Var
 
-root_log = logging.getLogger(__name__)
+log = logging.getLogger("WebStreamer.utils.file_properties.file-info")
 
 @dataclass
 class FileInfo:
-    file_id: str
-    dc_id: int
+    """A dataclass to hold file properties."""
+    file_id: int
     file_size: int
     file_name: str
     mime_type: str
-    location: Document
+    dc_id: int
+    location: any
 
-def get_short_hash(data: str) -> str:
+def pack_file(file_name: str, file_size: int, mime_type: str, file_id: int) -> bytes:
     """
-    Generates a URL-safe short hash from a string.
+    Packs file information into a byte string for hashing.
     """
-    md5_hash = hashlib.md5(data.encode()).hexdigest()
-    # Use URL-safe base64 encoding to make the hash suitable for URLs
-    base64_encoded = base64.urlsafe_b64encode(md5_hash.encode()).decode()
-    return base64_encoded.rstrip("=")
+    return f"{file_name}|{file_size}|{mime_type}|{file_id}".encode()
 
-def pack_file(
-    file_name: str,
-    file_size: int,
-    mime_type: str,
-    file_id: str
-) -> str:
+def get_short_hash(data: bytes) -> str:
     """
-    Packs file information into a JSON string and encodes it.
+    Generates a short, URL-safe hash for the given data.
     """
-    # Create a dictionary with file metadata
-    data = {
-        "file_name": file_name,
-        "file_size": file_size,
-        "mime_type": mime_type,
-        "file_id": file_id
-    }
-    # Serialize to a compact JSON string and encode
-    return json.dumps(data, separators=(",", ":"))
-
-async def get_file_ids(client: TelegramClient, chat_id: int, message_id: int) -> Optional[FileInfo]:
-    """
-    Retrieves file information from a message in a Telegram channel.
-    This function is a wrapper for Telethon's get_messages() and handles
-    potential errors with message IDs.
-    """
-    log = root_log.getChild("file-info")
+    hash_object = hashlib.sha1(data)
+    hex_digest = hash_object.hexdigest()
     
-    try:
-        msg_id_int = int(message_id)
-    except ValueError:
-        log.error("Invalid message_id format: %s. Message ID must be a simple integer.", message_id)
-        return None
-
-    try:
-        message: Message = await client.get_messages(chat_id, ids=[msg_id_int])
-
-        if not message or not message[0]:
-            log.warning("Message with ID %s not found in channel %s.", msg_id_int, chat_id)
-            return None
-
-        message_obj = message[0]
-        
-        if not isinstance(message_obj.media, Document):
-            log.warning("Message with ID %s does not contain a document.", msg_id_int)
-            return None
-
-        document: Document = message_obj.media.document
-        
-        file_info = FileInfo(
-            file_id=str(document.id),
-            dc_id=document.dc_id,
-            file_size=document.size,
-            file_name=document.file_name,
-            mime_type=document.mime_type,
-            location=document
-        )
-
-        return file_info
+    # We use URL-safe base64 encoding to make sure the hash can be used in URLs
+    encoded_bytes = base64.urlsafe_b64encode(hex_digest.encode('utf-8'))
     
-    except MessageIdInvalidError:
-        log.error("Message ID %s is invalid or out of range.", msg_id_int)
-        return None
+    return encoded_bytes.decode('utf-8')[:8]  # Take a short prefix
+
+async def get_file_info(client: TelegramClient, channel_id: int, message_id: int) -> Optional[FileInfo]:
+    """
+    Retrieves a file's properties from a Telegram message, handling all media types.
+    """
+    try:
+        message = await client.get_messages(channel_id, ids=message_id)
+        if not message:
+            log.warning(f"Message with ID {message_id} not found.")
+            return None
+        
+        media = None
+        if message.document:
+            media = message.document
+        elif message.video:
+            media = message.video
+        elif message.audio:
+            media = message.audio
+        elif message.photo:
+            media = message.photo
+        
+        if not media:
+            log.warning(f"Message with ID {message_id} does not contain a document or other media.")
+            return None
+            
+        file_id = media.id
+        file_size = media.size
+        
+        if hasattr(media, 'mime_type') and media.mime_type:
+            mime_type = media.mime_type
+        else:
+            mime_type = 'application/octet-stream' # Fallback mime type
+            
+        file_name = getattr(media.attributes[0], 'file_name', 'file') if media.attributes else 'file'
+        
+        dc_id = media.dc_id
+        location = media
+        
+        return FileInfo(file_id, file_size, file_name, mime_type, dc_id, location)
+    
     except Exception as e:
-        log.error("An unexpected error occurred while fetching message %s: %s", msg_id_int, e)
+        log.error("An error occurred while getting file info: %s", e, exc_info=True)
         return None
 
-# The get_file_info function is now an alias to get_file_ids to maintain compatibility
-# with other files that might still be using the old name.
-get_file_info = get_file_ids
 
