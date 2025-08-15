@@ -7,7 +7,6 @@ from telethon.events import NewMessage
 from telethon.extensions import html
 from WebStreamer.clients import StreamBot
 # We import get_file_info, pack_file, and get_short_hash from our utility file.
-# The get_file_info function is a wrapper for get_file_ids.
 from WebStreamer.utils.file_properties import get_file_info, pack_file, get_short_hash
 from WebStreamer.vars import Var
 
@@ -25,13 +24,20 @@ async def media_receive_handler(event: NewMessage.Event):
         )
     try:
         log_msg=await event.message.forward_to(Var.BIN_CHANNEL)
-        # Fix: We must use the 'await' keyword to get the result of the async function.
-        file_info=await get_file_info(log_msg)
+        
+        # FIX: We now correctly call get_file_info with the client, chat_id, and message_id.
+        # This will ensure the function can properly retrieve the file properties.
+        file_info=await get_file_info(event.client, log_msg.chat_id, log_msg.id)
+        
+        if not file_info:
+            logging.error("Failed to retrieve file info for message ID: %s", log_msg.id)
+            return await event.message.reply("Sorry, I could not get file info for this message.")
+
         full_hash = pack_file(
             file_info.file_name,
             file_info.file_size,
             file_info.mime_type,
-            file_info.id
+            file_info.file_id # Use file_info.file_id here
         )
         file_hash=get_short_hash(full_hash)
         
