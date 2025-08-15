@@ -15,7 +15,8 @@ from WebStreamer.vars import Var
 routes = web.RouteTableDef()
 log = logging.getLogger(__name__)
 
-# Corrected routes to include a /stream/ prefix for all streaming endpoints.
+# Route to handle HLS streaming with or without the /stream prefix
+@routes.get("/hls/{message_id}.m3u8")
 @routes.get("/stream/hls/{message_id}.m3u8")
 async def hls_stream_handler(request: web.Request):
     """
@@ -61,6 +62,8 @@ async def hls_stream_handler(request: web.Request):
         log.error("An error occurred during HLS streaming: %s", e)
         return web.Response(text="An error occurred while trying to stream the file.", status=500)
 
+# Route to handle direct streaming with or without the /stream prefix
+@routes.get("/{message_id}")
 @routes.get("/stream/{message_id}")
 async def direct_stream_handler(request: web.Request):
     """
