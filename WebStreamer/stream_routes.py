@@ -39,7 +39,7 @@ async def hls_stream_handler(request: web.Request):
     if not file_info:
         return web.Response(text="File not found or not a valid document.", status=404)
         
-    if not is_check_hash_match(file_info, hash_value):
+    if not is_check_hash_match(file_info, message_id, hash_value):
         return web.Response(text="Hash mismatch. Unauthorized access.", status=401)
         
     if not is_media(file_info.mime_type):
@@ -81,7 +81,7 @@ async def direct_stream_handler(request: web.Request):
     if not file_info:
         return web.Response(text="File not found or not a valid document.", status=404)
         
-    if not is_check_hash_match(file_info, hash_value):
+    if not is_check_hash_match(file_info, message_id, hash_value):
         return web.Response(text="Hash mismatch. Unauthorized access.", status=401)
 
     temp_file_path = file_cache.get(message_id)
