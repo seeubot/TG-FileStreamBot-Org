@@ -19,109 +19,51 @@ def is_media(mime_type: str) -> bool:
     """Checks if the mime type is a recognized media type."""
     return "video/" in mime_type or "audio/" in mime_type
 
-async def stream_to_process(client: TelegramClient, file_info: FileInfo, process_cmd: list = None):
-    """
-    Robustly streams a file from Telegram and pipes it to an external process (like ffmpeg)
-    or directly to the client. This function uses an asyncio Queue to buffer data,
-    preventing timeouts and pipe errors.
-    """
-    queue = asyncio.Queue()
-    
-    # Task 1: Download chunks from Telegram into the queue
-    async def download_task():
-        try:
-            async for chunk in client.iter_download(file_info.location, chunk_size=524288):
-                await queue.put(chunk)
-            await queue.put(None)  # Sentinel value to signal end of stream
-        except asyncio.CancelledError:
-            await queue.put(None)
-            log.info("Download task cancelled.")
-        except Exception as e:
-            log.error(f"Error in download task: {e}")
-            await queue.put(None)
-    
-    download_coroutine = asyncio.create_task(download_task())
-    
-    proc = None
-    if process_cmd:
-        try:
-            # Create a subprocess for FFmpeg
-            proc = await asyncio.create_subprocess_exec(
-                *process_cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL
-            )
-        except FileNotFoundError:
-            log.error("FFmpeg not found. Is it installed?")
-            raise
-    
+async def download_to_file(client: TelegramClient, file_info: FileInfo, temp_file_path: str):
+    """Downloads a file from Telegram to a local temporary file."""
     try:
-        if proc:
-            # Task 2: Feed the downloaded chunks from the queue to FFmpeg's stdin
-            async def feed_ffmpeg_stdin():
-                while True:
-                    chunk = await queue.get()
-                    if chunk is None:
-                        break
-                    try:
-                        proc.stdin.write(chunk)
-                        await proc.stdin.drain()
-                    except (BrokenPipeError, ConnectionResetError):
-                        log.warning("FFmpeg pipe closed prematurely.")
-                        break
-                proc.stdin.close()
-            
-            feed_task = asyncio.create_task(feed_ffmpeg_stdin())
-
-            # Yield FFmpeg's stdout directly to the client
-            while not proc.stdout.at_eof():
-                yield await proc.stdout.read(8192)
-            
-            await feed_task
-            await proc.wait()
-            
-        else:
-            # Direct streaming: yield chunks from the queue directly
-            while True:
-                chunk = await queue.get()
-                if chunk is None:
-                    break
-                yield chunk
-    
+        log.info(f"Downloading file to {temp_file_path}")
+        await client.download_media(file_info.location, temp_file_path)
+        log.info(f"Download complete for {file_info.file_name}")
+        return True
     except asyncio.CancelledError:
-        log.info("Stream cancelled by client.")
-        if proc and proc.returncode is None:
-            proc.terminate()
-            await proc.wait()
-        download_coroutine.cancel()
+        log.info("Download task cancelled.")
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
         raise
     except Exception as e:
-        log.error(f"Error during streaming: {e}")
-    finally:
-        # Ensure cleanup of all tasks and processes
-        if download_coroutine and not download_coroutine.done():
-            download_coroutine.cancel()
-        if proc and proc.returncode is None:
-            proc.terminate()
-            await proc.wait()
+        log.error(f"Error downloading file: {e}")
+        return False
 
-async def generate_hls_from_stream(client: TelegramClient, file_info: FileInfo):
+async def generate_hls_from_file(file_path: str):
     """
-    Generates an HLS stream by piping a Telegram file to FFmpeg.
+    Generates an HLS stream by piping a local file to FFmpeg.
     """
     cmd = [
-        "ffmpeg", "-i", "pipe:0", "-c", "copy", "-map", "0", "-f", "hls", 
+        "ffmpeg", "-i", file_path, "-c", "copy", "-map", "0", "-f", "hls", 
         "-hls_time", "10", "-hls_list_size", "0", "-hls_segment_type", "fmp4", 
         "-hls_playlist_type", "vod", "pipe:1"
     ]
-    async for chunk in stream_to_process(client, file_info, process_cmd=cmd):
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL
+    )
+    
+    while True:
+        chunk = await proc.stdout.read(8192)
+        if not chunk:
+            break
         yield chunk
+    
+    await proc.wait()
 
-async def generate_direct_stream(client: TelegramClient, file_info: FileInfo):
+async def generate_direct_stream_from_file(file_path: str):
     """
-    Generates a direct stream from a Telegram file without any transcoding.
+    Generates a direct stream from a local file.
     """
-    async for chunk in stream_to_process(client, file_info):
-        yield chunk
+    with open(file_path, "rb") as f:
+        while chunk := f.read(8192):
+            yield chunk
+
 
