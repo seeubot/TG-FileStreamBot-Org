@@ -24,14 +24,13 @@ async def media_receive_handler(event: NewMessage.Event):
     try:
         log_msg=await event.message.forward_to(Var.BIN_CHANNEL)
         
-        # The fix: call get_file_info() with the correct client, channel_id, and message_id
         file_info = await get_file_info(StreamBot, log_msg.chat_id, log_msg.id)
 
         full_hash = pack_file(
             file_info.file_name,
             file_info.file_size,
             file_info.mime_type,
-            log_msg.id  # FIX: Use the message ID directly as the unique file identifier
+            log_msg.id  # Use the message ID as the unique file identifier
         )
         file_hash=get_short_hash(full_hash)
         
