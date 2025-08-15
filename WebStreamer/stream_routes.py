@@ -40,17 +40,19 @@ async def hls_stream_handler(request: web.Request):
     if not is_ffmpeg_installed():
         return web.Response(text="FFmpeg is not installed on the server.", status=500)
     
-    media_properties = await get_media_properties(StreamBot, Var.BIN_CHANNEL, message_id)
+    # We don't need media properties to stream, so this can be removed if not used.
+    # media_properties = await get_media_properties(StreamBot, Var.BIN_CHANNEL, message_id)
     
-    if not media_properties:
-        return web.Response(text="Could not get media properties for this file.", status=500)
+    # if not media_properties:
+    #     return web.Response(text="Could not get media properties for this file.", status=500)
 
     try:
         response = web.Response(status=200, content_type="application/x-mpegURL")
         response.headers['Content-Disposition'] = 'inline'
         async def stream_generator():
             try:
-                async for chunk in generate_hls_from_stream(StreamBot, Var.BIN_CHANNEL, message_id):
+                # Passing the file_info object now
+                async for chunk in generate_hls_from_stream(StreamBot, file_info):
                     yield chunk
             except asyncio.CancelledError:
                 log.info("HLS stream cancelled.")
@@ -95,6 +97,7 @@ async def direct_stream_handler(request: web.Request):
     
     try:
         await response.prepare(request)
+        # Corrected iter_download call to use the file's location object
         async for chunk in StreamBot.iter_download(file_info.location):
             await response.write(chunk)
             
