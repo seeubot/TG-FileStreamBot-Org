@@ -3,17 +3,21 @@
 # Modifications made by Deekshith SH, 2024-2025
 # Copyright (C) 2024-2025 Deekshith SH
 
+import os
 import logging
 import asyncio
 from aiohttp import web
 from WebStreamer.clients import StreamBot
 from WebStreamer.utils.file_properties import get_file_info
 from WebStreamer.utils.bot_utils import is_check_hash_match
-from WebStreamer.utils.ffmpeg_utils import is_media, is_ffmpeg_installed, generate_hls_from_stream, generate_direct_stream
+from WebStreamer.utils.ffmpeg_utils import is_media, is_ffmpeg_installed, download_to_file, generate_hls_from_file, generate_direct_stream_from_file
 from WebStreamer.vars import Var
 
 routes = web.RouteTableDef()
 log = logging.getLogger(__name__)
+
+# Cache for temporary file paths
+file_cache = {}
 
 @routes.get("/status", allow_head=True)
 async def root_route_handler(_: web.Request):
@@ -44,12 +48,19 @@ async def hls_stream_handler(request: web.Request):
     if not is_ffmpeg_installed():
         return web.Response(text="FFmpeg is not installed on the server.", status=500)
 
+    temp_file_path = file_cache.get(message_id)
+    if not temp_file_path or not os.path.exists(temp_file_path):
+        temp_file_path = f"temp_files/{message_id}_{file_info.file_name}"
+        if not await download_to_file(StreamBot, file_info, temp_file_path):
+            return web.Response(text="An error occurred while downloading the file.", status=500)
+        file_cache[message_id] = temp_file_path
+
     try:
         response = web.Response(status=200, content_type="application/x-mpegURL")
         response.headers['Content-Disposition'] = 'inline'
         
         async def stream_generator():
-            async for chunk in generate_hls_from_stream(StreamBot, file_info):
+            async for chunk in generate_hls_from_file(temp_file_path):
                 yield chunk
         
         response.body = stream_generator()
@@ -73,6 +84,13 @@ async def direct_stream_handler(request: web.Request):
     if not is_check_hash_match(file_info, hash_value):
         return web.Response(text="Hash mismatch. Unauthorized access.", status=401)
 
+    temp_file_path = file_cache.get(message_id)
+    if not temp_file_path or not os.path.exists(temp_file_path):
+        temp_file_path = f"temp_files/{message_id}_{file_info.file_name}"
+        if not await download_to_file(StreamBot, file_info, temp_file_path):
+            return web.Response(text="An error occurred while downloading the file.", status=500)
+        file_cache[message_id] = temp_file_path
+
     disposition = "inline" if stream_as else "attachment"
     
     response = web.StreamResponse(status=200, headers={
@@ -82,7 +100,7 @@ async def direct_stream_handler(request: web.Request):
     
     try:
         await response.prepare(request)
-        async for chunk in generate_direct_stream(StreamBot, file_info):
+        async for chunk in generate_direct_stream_from_file(temp_file_path):
             await response.write(chunk)
             
     except ConnectionResetError:
