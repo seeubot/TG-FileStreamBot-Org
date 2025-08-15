@@ -39,7 +39,7 @@ async def stream_to_process(client: TelegramClient, file_info: FileInfo, process
             log.error(f"Error in download task: {e}")
             await queue.put(None)
     
-    download_coroutine = download_task()
+    download_coroutine = asyncio.create_task(download_task())
     
     proc = None
     if process_cmd:
@@ -89,6 +89,7 @@ async def stream_to_process(client: TelegramClient, file_info: FileInfo, process
         if proc:
             proc.terminate()
             await proc.wait()
+        download_coroutine.cancel()
         raise
     except Exception as e:
         log.error(f"Error during streaming: {e}")
