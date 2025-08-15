@@ -4,6 +4,7 @@
 # Copyright (C) 2024-2025 Deekshith SH
 
 import logging
+import asyncio
 from aiohttp import web
 from WebStreamer.clients import StreamBot
 from WebStreamer.utils.file_properties import get_file_info
