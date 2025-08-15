@@ -12,7 +12,6 @@ from WebStreamer.utils.file_properties import FileInfo
 log = logging.getLogger(__name__)
 
 # This is a very basic check for a unix-like environment
-# We don't need a super-detailed check for now.
 def is_ffmpeg_installed():
     """Checks if FFmpeg is installed on the system."""
     return os.path.exists("/usr/bin/ffmpeg")
@@ -34,9 +33,10 @@ async def get_media_properties(client: TelegramClient, channel_id: int, message_
     return None
 
 
-async def generate_hls_from_stream(client: TelegramClient, channel_id: int, message_id: int):
+async def generate_hls_from_stream(client: TelegramClient, file_info: FileInfo):
     """
     Generates an HLS stream from a Telegram file using FFmpeg.
+    This function now takes the file_info object as an argument.
     """
     cmd = [
         "ffmpeg", "-i", "pipe:0", "-codec", "copy",
@@ -52,7 +52,8 @@ async def generate_hls_from_stream(client: TelegramClient, channel_id: int, mess
     )
 
     try:
-        async for chunk in client.iter_download(channel_id, message_id):
+        # Corrected iter_download call to use the file's location object
+        async for chunk in client.iter_download(file_info.location):
             try:
                 proc.stdin.write(chunk)
                 await proc.stdin.drain()
