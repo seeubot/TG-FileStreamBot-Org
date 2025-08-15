@@ -40,10 +40,7 @@ from telethon.tl.types import DcOption
 from telethon.errors import DcIdInvalidError
 from telethon.sessions import StringSession
 
-# === ADD THIS LINE TO IMPORT __version__ ===
 from WebStreamer import __version__
-# ==========================================
-
 from WebStreamer.utils.util import decrement_counter, increment_counter
 from WebStreamer.utils.file_properties import FileInfo, get_file_ids
 from WebStreamer.vars import Var
@@ -57,18 +54,25 @@ if Var.CONNECTION_LIMIT > 25:
 clients_dict = {}
 work_loads: Dict[int, int] = {}
 
-# === ADD THIS CHECK FOR THE SESSION VARIABLE ===
-if not Var.SESSION:
-    logging.critical("FATAL: SESSION variable is not set. Please generate a Telethon session string.")
-    sys.exit(1)
-# ===============================================
-
-StreamBot = TelegramClient(StringSession(Var.SESSION), Var.API_ID, Var.API_HASH, app_version=__version__)
+StreamBot = None
 multi_clients = {}
 
 async def initialize_clients():
     """Initializes the multi-client system"""
     global clients_dict
+    global StreamBot
+
+    # Check if the session variable is set and not empty
+    if not Var.SESSION:
+        logging.critical("FATAL: SESSION variable is not set. Please generate a Telethon session string.")
+        sys.exit(1)
+    
+    # --- NEW DEBUGGING LINE ---
+    logging.info(f"The length of the SESSION string is: {len(Var.SESSION)}")
+    # --------------------------
+
+    StreamBot = TelegramClient(StringSession(Var.SESSION), Var.API_ID, Var.API_HASH, app_version=__version__)
+    
     for i in range(Var.CONNECTION_LIMIT):
         bot_session = StringSession(Var.SESSION+str(i) if i > 0 else Var.SESSION)
         multi_clients[i] = TelegramClient(
