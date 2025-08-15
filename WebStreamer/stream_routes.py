@@ -31,10 +31,7 @@ async def get_video_metadata(file_id: FileInfo, transfer: ParallelTransferrer) -
     try:
         log.info("Starting ffprobe to get video metadata for file ID %s", file_id.file_id)
         
-        # We'll use a safer approach by running ffprobe on a downloaded, temporary file.
-        # Piping directly from a generator to a subprocess can be complex and error-prone.
         with tempfile.NamedTemporaryFile(suffix=file_id.file_name) as temp_file:
-            # Download a small chunk of the file to get metadata
             partial_file_data_generator = transfer.download(
                 file_id, file_id.file_size, 0, 1024 * 1024, 0, "127.0.0.1"
             )
@@ -42,7 +39,6 @@ async def get_video_metadata(file_id: FileInfo, transfer: ParallelTransferrer) -
                 temp_file.write(chunk)
             temp_file.flush()
 
-            # FFprobe command to get all streams in JSON format
             command = [
                 'ffprobe',
                 '-v', 'error',
@@ -65,25 +61,23 @@ async def get_video_metadata(file_id: FileInfo, transfer: ParallelTransferrer) -
                 log.info("ffprobe successful. Duration: %s seconds", duration_seconds)
                 return {
                     "duration_seconds": duration_seconds,
-                    "segment_duration": 5 # Hardcoding segment duration for simplicity
+                    "segment_duration": 5
                 }
             else:
                 log.error(f"ffprobe failed with error: {stderr.decode()}")
-                return {"duration_seconds": 60, "segment_duration": 5} # Fallback
+                return {"duration_seconds": 60, "segment_duration": 5}
                 
     except FileNotFoundError:
         log.critical("Error running ffprobe: FFmpeg is not installed or not in PATH.")
         log.critical("HLS streaming functionality will not work until FFmpeg is installed.")
-        return {"duration_seconds": 60, "segment_duration": 5} # Fallback to dummy data
+        return {"duration_seconds": 60, "segment_duration": 5}
     except Exception as e:
         log.critical(f"An error occurred during ffprobe processing: {e}", exc_info=True)
-        return {"duration_seconds": 60, "segment_duration": 5} # Fallback
-
+        return {"duration_seconds": 60, "segment_duration": 5}
 
 async def create_hls_playlist(request: web.Request, file_id: FileInfo, secure_hash: str) -> str:
     """
     Generates an M3U8 playlist for HLS streaming.
-    This function uses ffprobe to get video duration.
     """
     index = min(work_loads, key=work_loads.get)
     faster_client = multi_clients[index]
@@ -105,7 +99,7 @@ async def create_hls_playlist(request: web.Request, file_id: FileInfo, secure_ha
 
     for i in range(num_segments):
         playlist.append(f"#EXTINF:{segment_duration}.0,")
-        playlist.append(f"/hls/{file_id.id}/{i}.ts?hash={secure_hash}")
+        playlist.append(f"/hls/{file_id.file_id}/{i}.ts?hash={secure_hash}")
 
     playlist.append("#EXT-X-ENDLIST")
     return "\n".join(playlist)
@@ -356,7 +350,6 @@ async def media_streamer(request: web.Request, message_id: int, secure_hash: str
     mime_type = file_id.mime_type
     file_name = file_id.file_name
     
-    # Change the default to 'inline' for streaming.
     disposition = "inline"
     if not request.rel_url.query.get("s"):
         disposition = "attachment"
