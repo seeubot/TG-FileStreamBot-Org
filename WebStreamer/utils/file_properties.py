@@ -1,60 +1,74 @@
 # This file is a part of TG-FileStreamBot
+#
+# Modifications made by Deekshith SH, 2024-2025
+# Copyright (C) 2024-2025 Deekshith SH
 
+# pylint: disable=protected-access
+
+import logging
 from dataclasses import dataclass
-import hashlib
-from typing import Optional, Union
+from typing import Optional, List
 from telethon import TelegramClient
-from telethon.utils import get_input_location
-from telethon.tl import types
-from telethon.tl.patched import Message
-from WebStreamer.vars import Var
+from telethon.tl.types import Message, Document, Channel
+from telethon.errors import MessageIdInvalidError
+
+root_log = logging.getLogger(__name__)
 
 @dataclass
 class FileInfo:
-    __slots__ = ("file_size", "mime_type", "file_name", "id", "dc_id", "location")
-
-    file_size: int
-    mime_type: str
-    file_name: str
-    id: int
+    file_id: str
     dc_id: int
-    location: Union[types.InputPhotoFileLocation, types.InputDocumentFileLocation]
-
-class HashableFileStruct:
-    def __init__(self, file_name: str, file_size: int, mime_type: str, file_id: int):
-        self.file_name = file_name
-        self.file_size = file_size
-        self.mime_type = mime_type
-        self.file_id = file_id
-
-    def pack(self) -> str:
-        hasher = hashlib.md5()
-        fields = [self.file_name, str(self.file_size), self.mime_type, str(self.file_id)]
-
-        for field in fields:
-            hasher.update(field.encode())
-
-        return hasher.hexdigest()
+    location: Document
+    # You can add more attributes here as needed
 
 async def get_file_ids(client: TelegramClient, chat_id: int, message_id: int) -> Optional[FileInfo]:
-    message: Message = await client.get_messages(chat_id, ids=message_id)
-    if not message:
+    """
+    Retrieves file information from a message in a Telegram channel.
+    This function is a wrapper for Telethon's get_messages() and handles
+    potential errors with message IDs.
+    """
+    log = root_log.getChild("file-info")
+    
+    try:
+        # The message_id must be a simple integer.
+        # This will raise a ValueError if it is not.
+        msg_id_int = int(message_id)
+
+    except ValueError:
+        log.error("Invalid message_id format: %s. Message ID must be a simple integer.", message_id)
         return None
-    return get_file_info(message)
 
-def get_file_info(message: Message) -> FileInfo:
-    media: Union[types.MessageMediaDocument, types.MessageMediaPhoto] = message.media
-    file = getattr(media, "document", None) or getattr(media, "photo", None)
-    return FileInfo(
-        message.file.size,
-        message.file.mime_type,
-        getattr(message.file, "name", None) or "",
-        file.id,
-        *get_input_location(media)
-    )
+    try:
+        # get_messages expects a list of integer IDs.
+        message: Message = await client.get_messages(chat_id, ids=[msg_id_int])
 
-def pack_file(file_name: str, file_size: int, mime_type: str, file_id: int) -> str:
-    return HashableFileStruct(file_name, file_size, mime_type, file_id).pack()
+        # If no message is found, message[0] will be None
+        if not message or not message[0]:
+            log.warning("Message with ID %s not found in channel %s.", msg_id_int, chat_id)
+            return None
 
-def get_short_hash(file_hash: str) -> str:
-    return file_hash[:Var.HASH_LENGTH]
+        message_obj = message[0]
+        
+        if not isinstance(message_obj.media, Document):
+            log.warning("Message with ID %s does not contain a document.", msg_id_int)
+            return None
+
+        document: Document = message_obj.media.document
+        
+        # We now have a valid document object, extract its properties.
+        # This is where the long integer from the traceback originates from a different file.
+        file_info = FileInfo(
+            file_id=str(document.id), # Store as a string
+            dc_id=document.dc_id,
+            location=document
+        )
+
+        return file_info
+    
+    except MessageIdInvalidError:
+        log.error("Message ID %s is invalid or out of range.", msg_id_int)
+        return None
+    except Exception as e:
+        log.error("An unexpected error occurred while fetching message %s: %s", msg_id_int, e)
+        return None
+
