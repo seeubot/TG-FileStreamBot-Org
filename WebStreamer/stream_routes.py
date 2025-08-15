@@ -9,19 +9,15 @@ from aiohttp import web
 from WebStreamer.clients import StreamBot
 from WebStreamer.utils.file_properties import get_file_info
 from WebStreamer.utils.bot_utils import is_check_hash_match
-from WebStreamer.utils.ffmpeg_utils import is_media, is_ffmpeg_installed, get_media_properties, generate_hls_from_stream
+from WebStreamer.utils.ffmpeg_utils import is_media, is_ffmpeg_installed, generate_hls_from_stream, generate_direct_stream
 from WebStreamer.vars import Var
 
 routes = web.RouteTableDef()
 log = logging.getLogger(__name__)
 
-# Route to handle HLS streaming with or without the /stream prefix
 @routes.get("/hls/{message_id}.m3u8")
 @routes.get("/stream/hls/{message_id}.m3u8")
 async def hls_stream_handler(request: web.Request):
-    """
-    Handles HLS streaming requests for media files.
-    """
     message_id = request.match_info['message_id']
     if not message_id.isdigit():
         return web.Response(text="Invalid message ID", status=400)
@@ -45,16 +41,10 @@ async def hls_stream_handler(request: web.Request):
     try:
         response = web.Response(status=200, content_type="application/x-mpegURL")
         response.headers['Content-Disposition'] = 'inline'
+        
         async def stream_generator():
-            try:
-                # Use the new direct piping method
-                async for chunk in generate_hls_from_stream(StreamBot, file_info):
-                    yield chunk
-            except asyncio.CancelledError:
-                log.info("HLS stream cancelled.")
-                raise
-            except Exception as e:
-                log.error("Error during HLS streaming: %s", e)
+            async for chunk in generate_hls_from_stream(StreamBot, file_info):
+                yield chunk
         
         response.body = stream_generator()
         return response
@@ -63,13 +53,9 @@ async def hls_stream_handler(request: web.Request):
         log.error("An error occurred during HLS streaming: %s", e)
         return web.Response(text="An error occurred while trying to stream the file.", status=500)
 
-# Route to handle direct streaming with or without the /stream prefix
 @routes.get("/{message_id}")
 @routes.get("/stream/{message_id}")
 async def direct_stream_handler(request: web.Request):
-    """
-    Handles direct streaming and download requests.
-    """
     message_id = request.match_info.get("message_id")
     if not message_id or not message_id.isdigit():
         return web.Response(text="Invalid message ID", status=400)
@@ -95,7 +81,7 @@ async def direct_stream_handler(request: web.Request):
     
     try:
         await response.prepare(request)
-        async for chunk in StreamBot.iter_download(file_info.location):
+        async for chunk in generate_direct_stream(StreamBot, file_info):
             await response.write(chunk)
             
     except ConnectionResetError:
