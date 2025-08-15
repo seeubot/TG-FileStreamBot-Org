@@ -15,7 +15,8 @@ from WebStreamer.vars import Var
 routes = web.RouteTableDef()
 log = logging.getLogger(__name__)
 
-@routes.get("/hls/{message_id}.m3u8")
+# Corrected routes to include a /stream/ prefix for all streaming endpoints.
+@routes.get("/stream/hls/{message_id}.m3u8")
 async def hls_stream_handler(request: web.Request):
     """
     Handles HLS streaming requests for media files.
@@ -39,19 +40,12 @@ async def hls_stream_handler(request: web.Request):
     
     if not is_ffmpeg_installed():
         return web.Response(text="FFmpeg is not installed on the server.", status=500)
-    
-    # We don't need media properties to stream, so this can be removed if not used.
-    # media_properties = await get_media_properties(StreamBot, Var.BIN_CHANNEL, message_id)
-    
-    # if not media_properties:
-    #     return web.Response(text="Could not get media properties for this file.", status=500)
 
     try:
         response = web.Response(status=200, content_type="application/x-mpegURL")
         response.headers['Content-Disposition'] = 'inline'
         async def stream_generator():
             try:
-                # Passing the file_info object now
                 async for chunk in generate_hls_from_stream(StreamBot, file_info):
                     yield chunk
             except asyncio.CancelledError:
@@ -67,7 +61,7 @@ async def hls_stream_handler(request: web.Request):
         log.error("An error occurred during HLS streaming: %s", e)
         return web.Response(text="An error occurred while trying to stream the file.", status=500)
 
-@routes.get("/{message_id}")
+@routes.get("/stream/{message_id}")
 async def direct_stream_handler(request: web.Request):
     """
     Handles direct streaming and download requests.
@@ -97,7 +91,6 @@ async def direct_stream_handler(request: web.Request):
     
     try:
         await response.prepare(request)
-        # Corrected iter_download call to use the file's location object
         async for chunk in StreamBot.iter_download(file_info.location):
             await response.write(chunk)
             
