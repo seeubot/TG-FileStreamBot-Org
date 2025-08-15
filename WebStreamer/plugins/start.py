@@ -47,4 +47,3 @@ async def start_command_handler(event: NewMessage.Event):
         parse_mode=html
     )
 
-
