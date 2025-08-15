@@ -24,9 +24,8 @@ async def media_receive_handler(event: NewMessage.Event):
     try:
         log_msg=await event.message.forward_to(Var.BIN_CHANNEL)
         
-        # This call to get_file_info() is correct if your function takes a message object.
-        # If it takes client, chat_id, and message_id, you must adjust accordingly.
-        file_info=get_file_info(log_msg)
+        # The fix: call get_file_info() with the correct client, channel_id, and message_id
+        file_info = await get_file_info(StreamBot, log_msg.chat_id, log_msg.id)
 
         full_hash = pack_file(
             file_info.file_name,
