@@ -47,6 +47,7 @@ async def hls_stream_handler(request: web.Request):
         response.headers['Content-Disposition'] = 'inline'
         async def stream_generator():
             try:
+                # Use the new direct piping method
                 async for chunk in generate_hls_from_stream(StreamBot, file_info):
                     yield chunk
             except asyncio.CancelledError:
