@@ -22,10 +22,8 @@ def is_media(mime_type: str) -> bool:
 async def stream_to_process(client: TelegramClient, file_info: FileInfo, process_cmd: list = None):
     """
     Robustly streams a file from Telegram and pipes it to an external process (like ffmpeg)
-    or directly to the client. This function handles the entire process in a single
-    async coroutine for stability.
+    or directly to the client. This function uses a single, direct pipeline for stability.
     """
-    
     proc = None
     if process_cmd:
         try:
@@ -40,27 +38,21 @@ async def stream_to_process(client: TelegramClient, file_info: FileInfo, process
             log.error("FFmpeg not found. Is it installed?")
             raise
     
-    download_iter = client.iter_download(file_info.location, chunk_size=524288)
-
     try:
-        while True:
-            try:
-                chunk = await asyncio.wait_for(download_iter.__anext__(), timeout=20)
-                if proc:
+        async for chunk in client.iter_download(file_info.location, chunk_size=524288):
+            if proc:
+                try:
                     proc.stdin.write(chunk)
                     await proc.stdin.drain()
-                else:
-                    yield chunk
-            except StopAsyncIteration:
-                break # End of download
-            except asyncio.TimeoutError:
-                log.warning("Timeout during file download. Restarting iteration.")
-                continue # Retry the download chunk
-            
+                except (BrokenPipeError, ConnectionResetError):
+                    log.warning("FFmpeg pipe closed prematurely.")
+                    break
+            else:
+                yield chunk
+
         if proc:
             proc.stdin.close()
             
-            # Yield FFmpeg's stdout directly to the client
             while True:
                 chunk = await proc.stdout.read(8192)
                 if not chunk:
