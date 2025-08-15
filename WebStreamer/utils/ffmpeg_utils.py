@@ -46,11 +46,18 @@ async def generate_hls_from_stream(client: TelegramClient, file_info: FileInfo):
         await client.download_media(file_info.location, temp_file_path)
         log.info(f"Download complete.")
         
-        # Step 2: Run FFmpeg with the temporary file as input
+        # Step 2: Run FFmpeg with the temporary file as input and improved HLS options
         cmd = [
-            "ffmpeg", "-i", temp_file_path, "-codec", "copy",
-            "-map", "0:0", "-f", "hls", "-hls_list_size", "0",
-            "-hls_segment_type", "fmp4", "pipe:1"
+            "ffmpeg", 
+            "-i", temp_file_path,
+            "-c", "copy",
+            "-map", "0",
+            "-f", "hls",
+            "-hls_time", "10",
+            "-hls_list_size", "0",
+            "-hls_segment_type", "fmp4",
+            "-hls_playlist_type", "vod",
+            "pipe:1"
         ]
         
         proc = await asyncio.create_subprocess_exec(
