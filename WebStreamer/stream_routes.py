@@ -66,8 +66,11 @@ async def hls_stream_handler(request: web.Request):
         response.body = stream_generator()
         return response
         
+    except (ConnectionResetError, asyncio.CancelledError):
+        # This means the user disconnected. We can just log this gracefully.
+        log.info("Client disconnected during HLS streaming.")
     except Exception as e:
-        log.error("An error occurred during HLS streaming: %s", e)
+        log.error("An unexpected error occurred during HLS streaming: %s", e)
         return web.Response(text="An error occurred while trying to stream the file.", status=500)
 
 @routes.get(r"/{message_id:\d+}", allow_head=True)
@@ -103,12 +106,15 @@ async def direct_stream_handler(request: web.Request):
         async for chunk in generate_direct_stream_from_file(temp_file_path):
             await response.write(chunk)
             
-    except ConnectionResetError:
-        log.warning("Connection was reset by the client.")
-    except asyncio.CancelledError:
-        log.info("Download cancelled.")
+    except (ConnectionResetError, asyncio.CancelledError):
+        # Client disconnected during streaming.
+        log.info("Client disconnected during direct streaming.")
     except Exception as e:
         log.error("An unexpected error occurred during streaming: %s", e)
     finally:
-        return response
+        # It's crucial to finalize the response even on an error
+        if not response.started:
+            # If the response hasn't even started, we should send an error code.
+            # This is a fallback in case of an extremely early error.
+            return web.Response(text="An error occurred.", status=500)
 
