@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 # This is a very basic check for a unix-like environment
 def is_ffmpeg_installed():
     """Checks if FFmpeg is installed on the system."""
+    # Assuming standard path for FFmpeg in a container environment
     return os.path.exists("/usr/bin/ffmpeg")
 
 def is_media(mime_type: str) -> bool:
@@ -32,37 +33,35 @@ async def get_media_properties(client: TelegramClient, channel_id: int, message_
         log.error("Failed to get media properties: %s", e)
     return None
 
-
 async def generate_hls_from_stream(client: TelegramClient, file_info: FileInfo):
     """
     Generates an HLS stream from a Telegram file using FFmpeg.
-    This function now takes the file_info object as an argument.
+    This version downloads the entire file to a temporary location first to avoid
+    BrokenPipeError and ensure a stable FFmpeg input.
     """
-    cmd = [
-        "ffmpeg", "-i", "pipe:0", "-codec", "copy",
-        "-map", "0:0", "-f", "hls", "-hls_list_size", "0",
-        "-hls_segment_type", "fmp4", "pipe:1"
-    ]
+    # Create a temporary file path
+    temp_file_path = f"temp_{file_info.file_id}_{file_info.file_name}"
     
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-
     try:
-        # Corrected iter_download call to use the file's location object
-        async for chunk in client.iter_download(file_info.location):
-            try:
-                proc.stdin.write(chunk)
-                await proc.stdin.drain()
-            except ConnectionError:
-                break
+        # Step 1: Download the entire file to the temporary path
+        log.info(f"Downloading file to temporary path: {temp_file_path}")
+        await client.download_media(file_info.location, temp_file_path)
+        log.info(f"Download complete.")
         
-        proc.stdin.close()
-        await proc.stdin.wait_closed()
+        # Step 2: Run FFmpeg with the temporary file as input
+        cmd = [
+            "ffmpeg", "-i", temp_file_path, "-codec", "copy",
+            "-map", "0:0", "-f", "hls", "-hls_list_size", "0",
+            "-hls_segment_type", "fmp4", "pipe:1"
+        ]
         
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        # Step 3: Read the HLS stream from FFmpeg's stdout and yield it
         while not proc.stdout.at_eof():
             yield await proc.stdout.read(8192)
 
@@ -71,7 +70,15 @@ async def generate_hls_from_stream(client: TelegramClient, file_info: FileInfo):
     except Exception as e:
         log.error("An error occurred during HLS stream generation: %s", e, exc_info=True)
     finally:
-        if proc.returncode is None:
+        # Clean up the temporary file
+        if os.path.exists(temp_file_path):
+            log.info(f"Cleaning up temporary file: {temp_file_path}")
+            os.remove(temp_file_path)
+        
+        if 'proc' in locals() and proc.returncode is None:
             proc.terminate()
-        await proc.wait()
+        
+        # Await the process to ensure it's fully finished
+        if 'proc' in locals():
+            await proc.wait()
 
